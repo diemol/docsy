@@ -1,17 +1,15 @@
-// Client-side hydration of the docs left-nav.
-//
-// A shared build drops the repeated left-nav from inner pages and leaves a
-// placeholder behind (see _partials/sidebar.html). Here we fetch the section's
-// "donor" page — the kept docs landing, named by data-nav-donor — extract its
-// left-nav, inject it in place of the placeholder, and apply the active-page
-// state client-side. The extracted nav is cached in sessionStorage so later
-// pages in the same section reuse it without re-fetching.
+// Client-side restore of the chrome a shared build drops: the docs left-nav,
+// and the navbar and footer (see "Navbar and footer" below). Each dropped
+// region leaves a placeholder naming its donor page (_partials/sidebar.html,
+// navbar.html, footer.html); the donor's region is fetched, injected in place,
+// and adapted to this page. The left-nav is cached in sessionStorage
+// so later pages in the same section reuse it without re-fetching.
 //
 // The same active-state pass also hydrates the cached inline nav that the donor
 // (and bigger sites) render once and share across pages: that menu ships hidden,
-// with no per-page active state baked in. Either way the resulting DOM matches a
-// full, non-shared render, so a shared build stays functionally equivalent to a full
-// one.
+// with no per-page active state baked in. Either way the resulting DOM aims to
+// match a full, non-shared render; the known gaps are the CCR case registry's
+// open items (tests/fixture-site/README.md).
 
 (function () {
   'use strict';
@@ -22,21 +20,43 @@
 
   const normalizePath = (path) => (path.endsWith('/') ? path : path + '/');
 
-  // The page's logical path, used to key all active-state restores. It defaults
-  // to window.location, but on print (/_print/…) and paginator (…/page/N/) pages
-  // the request URL isn't the page's canonical one; the server bakes the logical
-  // URL as data-canonical-path on the navbar placeholder (see navbar.html), read
-  // once in init() before the placeholders are swapped out.
+  // The same-origin page path that `urlOrPath` denotes, with a trailing slash,
+  // or null.
+  function sameOriginPath(urlOrPath) {
+    if (!urlOrPath) return null;
+    const origin = window.location.origin;
+    let path;
+    try {
+      const url = new URL(urlOrPath, window.location.href);
+      if (url.origin !== origin) return null;
+      // The path is written as a relative href, so it must read back as itself:
+      // `/.//host/…` re-parses to another host; `//site//site//host/…` and
+      // `blob:` (whose path is its inner URL) re-parse to a different path.
+      path = url.pathname;
+      const again = new URL(path, window.location.href);
+      if (again.origin !== origin || again.pathname !== path) return null;
+    } catch (e) {
+      return null;
+    }
+    return normalizePath(path);
+  }
+
+  // The page's HTML URL, the one its nav links use, keys all active-state
+  // restores, and the selector-link restores rebuild hrefs from it. Every
+  // navbar placeholder carries it as data-canonical-path (see navbar.html),
+  // since on print (/_print/…) and paginator (…/page/N/) pages the request URL
+  // isn't that URL; init() reads it once, before the placeholders are swapped
+  // out. Pages without a valid hint (no placeholder, as on full-mode pages with
+  // the cached sidebar; an override that drops it) key on window.location.
   let canonicalPath = null;
 
   function currentPath() {
-    return canonicalPath || normalizePath(window.location.pathname);
+    return canonicalPath || sameOriginPath(window.location.pathname) || '/';
   }
 
   function readCanonicalPath() {
     const el = document.querySelector('[data-canonical-path]');
-    const raw = el && el.getAttribute('data-canonical-path');
-    return raw ? normalizePath(raw) : null;
+    return sameOriginPath(el && el.getAttribute('data-canonical-path'));
   }
 
   // Apply the active-page classes to a freshly injected or shared nav. The
@@ -49,8 +69,8 @@
     const here = currentPath();
 
     // Prefer an exact nav entry for this page; otherwise fall back to the
-    // nearest ancestor entry (longest matching prefix). An out-of-tree page —
-    // one absent from its own nav, e.g. via toc_hide — has no exact entry, but a
+    // nearest ancestor entry (longest matching prefix). An out-of-tree page (one
+    // absent from its own nav, e.g. via toc_hide) has no exact entry, but a
     // full build still marks its ancestor sections as the active path (sidebar
     // tree: active-path when the page IsDescendant of a section), so anchor on
     // the ancestor to reproduce that trail.
@@ -87,7 +107,6 @@
 
     const currentItem = anchorLink.closest('li');
 
-    // Mark the anchor item and all of its ancestors as the active path.
     for (
       let li = currentItem;
       li;
@@ -97,7 +116,7 @@
     }
 
     // Reveal the active path. A foldable nav (the Docsy default for docs sites)
-    // opens purely via checked checkboxes — exactly what a full build bakes — so
+    // opens purely via checked checkboxes (exactly what a full build bakes), so
     // we set the same attribute and add nothing else, keeping the result
     // structurally identical to a full render. A non-foldable nav has no
     // checkboxes and instead uses the Bootstrap `show` class to open branches.
@@ -109,11 +128,11 @@
     }
 
     // In a non-foldable nav, also open the current item's siblings and direct
-    // children; a foldable nav leaves these to the checkboxes, matching a full
-    // build (which only checks the active path). Exact-match pages only — an
-    // ancestor anchor isn't the current item, so it gets no extra expansion.
+    // children (not every ancestor's siblings, as a full build does; CCR-07); a
+    // foldable nav leaves these to the checkboxes, matching a full build (which
+    // only checks the active path). Exact-match pages only: an ancestor anchor
+    // isn't the current item, so it gets no extra expansion.
     if (activeLink && currentItem && !foldable) {
-      // Expand the current item's siblings and its direct children.
       for (const sibling of currentItem.parentElement.children) {
         if (sibling !== currentItem && sibling.tagName === 'LI') {
           sibling.classList.add('show');
@@ -130,7 +149,7 @@
 
   function hydrate(menu) {
     applyActiveState(menu);
-    menu.classList.remove('d-none'); // reveal once the active state is in place
+    menu.classList.remove('d-none');
   }
 
   function readCache(key) {
@@ -178,14 +197,14 @@
     // Match a full scoped build's root markers when sidebar-root scoping is on
     // (the donor nav carries data-sidebar-root-id iff sidebar_root_enabled):
     // advertise the subtree as the nav's root, and flag the root link's label as
-    // the "up" icon (see sidebar-tree.html: data-sidebar-root-id, up-icon span).
+    // the "up" icon (see sidebar-tree.html for data-sidebar-root-id and the
+    // up-icon span).
     if (nav.hasAttribute('data-sidebar-root-id')) {
       nav.setAttribute('data-sidebar-root-id', rootPath);
       const rootSpan = rootLink.querySelector('span');
       if (rootSpan) rootSpan.classList.add('td-sidebar-root-up-icon');
     }
 
-    // Promote the subtree to be the nav's sole top-level section.
     const topUl = nav.querySelector('ul');
     if (topUl) {
       rootLi.remove();
@@ -231,23 +250,18 @@
         injectMarkup(placeholder, markup);
       })
       .catch((reason) => {
-        // Leave the placeholder in place if the donor can't be fetched. A richer
-        // recovery (retry, visible fallback) is a TODO if shared mode graduates beyond
-        // experimental; see tests/fixture-site/README.md.
+        // Leave the placeholder in place (recovery: tests/fixture-site/README.md
+        // § Open items).
         console.warn('chrome-nav: could not fetch nav donor', donor, reason);
       });
   }
 
-  // --- Page-invariant chrome (navbar, footer) -----------------------------
-  // The shared build keeps the navbar and footer only on home pages. An inner
-  // page leaves a placeholder per dropped region (see _partials/navbar.html
-  // and _partials/footer.html) naming the home "donor". Here we fetch the donor
-  // once, extract each region, and swap it in, so the page matches a full render.
+  // --- Navbar and footer ---------------------------------------------------
   const CHROME_REGIONS = { navbar: '.td-navbar', footer: '.td-footer' };
 
   // Re-apply this page's navbar cover/theme traits after the swap. The cover
   // (translucent) styling and dark theme are per-page, but the restored navbar
-  // is the home donor's, which may carry different traits. The placeholder's
+  // is the donor page's, which may carry different traits. The placeholder's
   // server-baked hints (data-navbar-cover, data-navbar-theme) carry this page's,
   // so the result matches a full build (see _partials/navbar.html).
   function applyNavbarCoverTheme(navbar, placeholder) {
@@ -262,10 +276,11 @@
     }
   }
 
-  // Re-derive the navbar's active link for the current page. The home donor's
-  // navbar carries the home page's active state, so clear it and mark the
-  // nav-link whose target is the closest ancestor of the current path (longest
-  // prefix), matching a full build's IsMenuCurrent/IsDescendant logic.
+  // Re-derive the navbar's active link for the current page. The donor page's
+  // navbar carries its own active state, so clear it and mark the nav-link
+  // whose target is the closest ancestor of the current path (longest prefix),
+  // an approximation of a full build's per-entry menu-membership tests
+  // (CCR-03, CCR-20).
   function setNavbarActive(navbar) {
     const here = currentPath();
     let best = null;
@@ -288,12 +303,11 @@
     if (best) best.classList.add('active');
   }
 
-  // The navbar's version/language selectors carry per-page links that the home
-  // donor renders for the home page, so re-derive each for the current page.
-  // `donorPath` is the donor's path — the current locale's home — passed down
-  // from restoreChrome.
-
-  // Version links are exact: each is a version's base URL plus the page path
+  // The navbar's version/language selectors carry per-page links that the donor
+  // page renders for itself, so re-derive each for the current page; `donorPath`
+  // is the donor page's path, the current language's root. Version links are
+  // exact when the donor path is a directory (not under uglyURLs, CCR-09):
+  // each is a version's base URL plus the page path
   // (when `version_menu_pagelinks` is on), so the donor's link is
   // `base + donorPath`. Strip that path and append this page's to reproduce the
   // full build's `base + thisPagePath`. Links without the page path (pagelinks
@@ -310,11 +324,11 @@
     }
   }
 
-  // Language links point at the current page's counterpart in each locale; the
-  // donor renders the home's, i.e. each locale's home. Swap the current locale's
-  // home prefix (`donorPath`) for the target locale's to reproduce the full
-  // build's link. Exact when translations share slugs and all exist (the common
-  // case); otherwise a best-effort functional restore.
+  // Language links point at the current page's counterpart in each language;
+  // the donor page renders its own, i.e. each language's root. Swap the current
+  // language's root prefix (`donorPath`) for the target language's to reproduce
+  // the full build's link; a best-effort restore when slugs differ across
+  // languages (CCR-10) or the donor path is a file (uglyURLs; CCR-09/10).
   function restoreLangLinks(navbar, donorPath) {
     const here = currentPath();
     if (!here.startsWith(donorPath)) return;
@@ -323,7 +337,9 @@
       '.td-lang-menu .dropdown-menu a[href]',
     )) {
       const langHome = normalizePath(new URL(link.href).pathname);
-      link.setAttribute('href', langHome + rel);
+      // A `//` right after the prefix would read as a host.
+      const target = sameOriginPath(langHome + rel);
+      if (target) link.setAttribute('href', target);
     }
   }
 
@@ -333,7 +349,7 @@
   }
 
   // Fetch a donor page (cached across the session) and hand its parsed Document
-  // to `callback`. Used to restore page-invariant chrome from the home page.
+  // to `callback`. Used to restore the navbar and footer from the root page.
   function withDonorDoc(url, callback) {
     const cached = readCache('doc:' + url);
     if (cached) {
@@ -349,9 +365,8 @@
         callback(new DOMParser().parseFromString(html, 'text/html'));
       })
       .catch((reason) => {
-        // Leave the placeholder in place if the donor can't be fetched. A richer
-        // recovery (retry, visible fallback) is a TODO if shared mode graduates beyond
-        // experimental; see tests/fixture-site/README.md.
+        // Leave the placeholder in place (recovery: tests/fixture-site/README.md
+        // § Open items).
         console.warn('chrome-nav: could not fetch chrome donor', url, reason);
       });
   }
@@ -392,7 +407,6 @@
       injectFromDonor(placeholder);
       return;
     }
-    // No placeholder: hydrate a shared/cached inline nav if one is present.
     const menu = document.getElementById(MENU_ID);
     if (menu && menu.classList.contains('d-none')) {
       hydrate(menu);

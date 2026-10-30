@@ -33,18 +33,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Full history: the main-ancestry check below needs it.
+          # Full history, all branches: the ancestry check below needs it.
           fetch-depth: 0
 
-      - name: 'Sanity check: tag commit is on main'
-        # The guards check the tag's own content for consistency; this pins
-        # the tagged commit to main's history (reviewed history as long as
-        # main is push-protected), so a tag on an unmerged commit fails
-        # before packing. Release tags come from main only (owner decision
-        # 2026-08-09); widen deliberately if a release-branch flow returns.
-        run: git merge-base --is-ancestor HEAD origin/main
+      - name: 'Sanity check: tag commit is on main or release'
+        # Both branches carry releases:
+        # docsy.dev/content/en/project/build/git-repo.md#workflow
+        # Full refs: a short origin/main resolves a same-named tag first.
+        run: >-
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main ||
+          git merge-base --is-ancestor HEAD refs/remotes/origin/release
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
@@ -64,7 +64,7 @@ jobs:
         # installs nothing, so only this repo's own lifecycle can run.
         run: npm pack --ignore-scripts=false --pack-destination "$RUNNER_TEMP"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/*.tgz
@@ -92,7 +92,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           # Writes the fresh userconfig the publish step relies on. Since v7,
@@ -102,7 +102,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/npm-tarball

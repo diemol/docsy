@@ -1,9 +1,21 @@
 // Online npm-audit gate, complementing the offline structural checks in
-// supply-chain-audit.test.mjs: committed locks stay free of unreviewed
-// advisories. Accepted advisories stay listed below and must still be
-// reported; once one disappears, its exception is stale.
+// supply-chain-audit.test.mjs.
+//
+// What it asserts: the root package-lock.json carries no advisory beyond
+// those listed below as reviewed and accepted; an accepted advisory that
+// stops being reported is a stale exception.
+//
+// What it audits: the root lock, the one install:safe's `npm ci` reads, whole:
+// every dependency kind, online against the public registry, as committed
+// (the spawn's flags, so the caller's npm config can't narrow it). Not
+// audited: theme/package-lock.json, whose packages resolve in the root lock
+// too. Residual: workspace config (workspace, workspaces,
+// include-workspace-root) in the caller's npm config still filters the tree
+// (CI sets none).
+//
+// cSpell:ignore ghsa vulns
 
-import test from 'node:test';
+import test, { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,13 +27,7 @@ const repoRoot = path.resolve(
 );
 
 // Entries: [GHSA ID, advisory package name].
-const acceptedAdvisories = new Map([
-  // No fixed version. Reached only through markdownlint-cli2's globbing
-  // (dev-only lint), whose brace patterns come from repo-tracked config and
-  // script arguments: a PR able to plant a hostile pattern already runs its
-  // own code. Worst case, the lint run crashes, failing the check.
-  ['GHSA-vfj7-8cjw-p6xm', 'braces'],
-]);
+const acceptedAdvisories = new Map([]);
 
 function validateAuditGate(report, accepted) {
   // Fail-closed on npm audit format changes.
@@ -29,7 +35,7 @@ function validateAuditGate(report, accepted) {
   assert.equal(report.error, undefined, 'npm audit reached the registry');
   assert.ok(
     report.metadata?.dependencies?.total > 0,
-    'the audit covered the installed dependency tree',
+    'audit report covers a non-empty lock tree',
   );
 
   const reported = new Map();
@@ -68,13 +74,28 @@ function validateAuditGate(report, accepted) {
   }
 }
 
-test('audit: reported advisories are reviewed and accepted', () => {
-  const res = spawnSync('npm', ['audit', '--json'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-    shell: process.platform === 'win32',
-  });
+test('npm audit gate: the committed lock carries no unreviewed advisory', () => {
+  const res = spawnSync(
+    'npm',
+    [
+      'audit',
+      '--json',
+      // The flags below declare what the test audits; see "What it audits" in
+      // the opening comment.
+      '--include=dev',
+      '--include=optional',
+      '--include=peer',
+      '--no-offline',
+      '--registry=https://registry.npmjs.org/',
+      '--package-lock-only',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      shell: process.platform === 'win32',
+    },
+  );
   if (res.error) {
     assert.fail(`npm audit failed to run: ${res.error.message}`);
   }
@@ -91,123 +112,127 @@ test('audit: reported advisories are reviewed and accepted', () => {
   validateAuditGate(report, acceptedAdvisories);
 });
 
-// Fixture-local accepted map, so the parser checks don't depend on the live
-// exception list.
-const fixtureAccepted = new Map([['GHSA-aaaa-bbbb-cccc', 'accepted-package']]);
+describe('validateAuditGate', () => {
+  // Fixture-local accepted map, so the parser checks don't depend on the live
+  // exception list.
+  const fixtureAccepted = new Map([
+    ['GHSA-aaaa-bbbb-cccc', 'accepted-package'],
+  ]);
 
-test('audit gate: parser rejects unreviewed advisories', () => {
-  const validReport = {
-    auditReportVersion: 2,
-    error: undefined,
-    metadata: { dependencies: { total: 1 } },
-    vulnerabilities: {
-      'package-a': {
-        name: 'package-a',
-        via: [
-          {
-            url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
-            severity: 'critical',
-            name: 'accepted-package',
-            title: 'Malware',
-          },
-        ],
+  it('accepts a report whose only advisory is accepted', () => {
+    const validReport = {
+      auditReportVersion: 2,
+      error: undefined,
+      metadata: { dependencies: { total: 1 } },
+      vulnerabilities: {
+        'package-a': {
+          name: 'package-a',
+          via: [
+            {
+              url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
+              severity: 'critical',
+              name: 'accepted-package',
+              title: 'Malware',
+            },
+          ],
+        },
       },
-    },
-  };
-  validateAuditGate(validReport, fixtureAccepted);
-});
+    };
+    validateAuditGate(validReport, fixtureAccepted);
+  });
 
-test('audit gate: parser rejects unaccepted advisories', () => {
-  const reportWithNewGHSA = {
-    auditReportVersion: 2,
-    error: undefined,
-    metadata: { dependencies: { total: 1 } },
-    vulnerabilities: {
-      'package-b': {
-        name: 'package-b',
-        via: [
-          {
-            url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
-            severity: 'high',
-            name: 'unreviewed-advisory',
-            title: 'New advisory',
-          },
-        ],
+  it('rejects an advisory not in the accepted map', () => {
+    const reportWithNewGHSA = {
+      auditReportVersion: 2,
+      error: undefined,
+      metadata: { dependencies: { total: 1 } },
+      vulnerabilities: {
+        'package-b': {
+          name: 'package-b',
+          via: [
+            {
+              url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz',
+              severity: 'high',
+              name: 'unreviewed-advisory',
+              title: 'New advisory',
+            },
+          ],
+        },
       },
-    },
-  };
-  assert.throws(
-    () => validateAuditGate(reportWithNewGHSA, fixtureAccepted),
-    /GHSA-xxxx-yyyy-zzzz.*reviewed, accepted advisory/,
-  );
-});
+    };
+    assert.throws(
+      () => validateAuditGate(reportWithNewGHSA, fixtureAccepted),
+      /GHSA-xxxx-yyyy-zzzz.*reviewed, accepted advisory/,
+    );
+  });
 
-test('audit gate: parser rejects stale exceptions (missing report)', () => {
-  const reportWithoutAcceptedGHSA = {
-    auditReportVersion: 2,
-    error: undefined,
-    metadata: { dependencies: { total: 1 } },
-    vulnerabilities: {},
-  };
-  assert.throws(
-    () => validateAuditGate(reportWithoutAcceptedGHSA, fixtureAccepted),
-    /accepted advisory GHSA-aaaa-bbbb-cccc remains reported/,
-  );
-});
+  it('rejects an accepted advisory that is no longer reported', () => {
+    const reportWithoutAcceptedGHSA = {
+      auditReportVersion: 2,
+      error: undefined,
+      metadata: { dependencies: { total: 1 } },
+      vulnerabilities: {},
+    };
+    assert.throws(
+      () => validateAuditGate(reportWithoutAcceptedGHSA, fixtureAccepted),
+      /accepted advisory GHSA-aaaa-bbbb-cccc remains reported/,
+    );
+  });
 
-test('audit gate: parser rejects format version changes', () => {
-  const reportV3 = {
-    auditReportVersion: 3,
-    error: undefined,
-    metadata: { dependencies: { total: 1 } },
-    vulnerabilities: {},
-  };
-  assert.throws(
-    () => validateAuditGate(reportV3, fixtureAccepted),
-    /report format is v2/,
-  );
-});
+  it('rejects a report format other than v2', () => {
+    const reportV3 = {
+      auditReportVersion: 3,
+      error: undefined,
+      metadata: { dependencies: { total: 1 } },
+      vulnerabilities: {},
+    };
+    assert.throws(
+      () => validateAuditGate(reportV3, fixtureAccepted),
+      /report format is v2/,
+    );
+  });
 
-test('audit gate: parser rejects string via without chain target', () => {
-  const reportWithDanglingStringVia = {
-    auditReportVersion: 2,
-    error: undefined,
-    metadata: { dependencies: { total: 1 } },
-    vulnerabilities: {
-      'package-c': {
-        name: 'package-c',
-        via: ['nonexistent-key'],
+  it('rejects a string via with no reported target', () => {
+    const reportWithDanglingStringVia = {
+      auditReportVersion: 2,
+      error: undefined,
+      metadata: { dependencies: { total: 1 } },
+      vulnerabilities: {
+        'package-c': {
+          name: 'package-c',
+          via: ['nonexistent-key'],
+        },
       },
-    },
-  };
-  assert.throws(
-    () => validateAuditGate(reportWithDanglingStringVia, fixtureAccepted),
-    /string via "nonexistent-key".*resolves to a reported vulnerability/,
-  );
-});
+    };
+    assert.throws(
+      () => validateAuditGate(reportWithDanglingStringVia, fixtureAccepted),
+      /string via "nonexistent-key".*resolves to a reported vulnerability/,
+    );
+  });
 
-test('audit gate: parser accepts valid transitive advisory chain', () => {
-  const reportWithTransitiveChain = {
-    auditReportVersion: 2,
-    error: undefined,
-    metadata: { dependencies: { total: 2 } },
-    vulnerabilities: {
-      'package-a': {
-        name: 'package-a',
-        via: ['package-b'],
+  it('accepts a transitive chain ending in an accepted advisory', () => {
+    const reportWithTransitiveChain = {
+      auditReportVersion: 2,
+      error: undefined,
+      metadata: { dependencies: { total: 2 } },
+      vulnerabilities: {
+        'package-a': {
+          name: 'package-a',
+          via: ['package-b'],
+        },
+        'package-b': {
+          name: 'package-b',
+          via: [
+            {
+              url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
+              severity: 'critical',
+              name: 'accepted-package',
+              title: 'Malware',
+            },
+          ],
+        },
       },
-      'package-b': {
-        name: 'package-b',
-        via: [
-          {
-            url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc',
-            severity: 'critical',
-            name: 'accepted-package',
-            title: 'Malware',
-          },
-        ],
-      },
-    },
-  };
-  validateAuditGate(reportWithTransitiveChain, fixtureAccepted);
+    };
+    validateAuditGate(reportWithTransitiveChain, fixtureAccepted);
+  });
 });

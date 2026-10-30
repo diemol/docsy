@@ -21,7 +21,18 @@ the [milestones][].
 
 ## Style guide
 
-- Use past tense when when describing releases.
+- Keep each entry to at most two Markdown source prose lines normally, never
+  more than four, as wrapped by the repo's formatter. Exclude separate link
+  definitions from the count.
+- State what changed and its consequence; link to details. Read the whole entry
+  before adding a clause.
+- Classify by what the reader experiences, not by the implementation. Restoring
+  documented behavior from a previous release is a [bug fix](#bug-fixes). If it
+  also breaks the [public customization surface](#public), list the change under
+  [**Breaking changes**](#breaking-change) and link the release post for
+  migration steps. Fixes to features introduced in the same release belong in
+  the description of the feature as shipped, not separate fix entries.
+- Use past tense when describing releases.
 - Generally, start each change entry with a verb (in the past tense). For
   example: Added, Changed, Deprecated, Fixed.
 - It's ok to follow that with "you can now...". For example:
@@ -162,19 +173,41 @@ history since 0.18.0][].
 
 **Other changes**:
 
-- ...
+- Fixed builds failing with `page reference "docs" is ambiguous` on sites with
+  pages named `docs` but no top-level `docs` section (since 0.18.0; since 0.15.0
+  with `llms.txt` enabled) ([#2875][], [design][project-root-page]).
 
 [**Experimental**](#experimental):
 
-- ...
+- **`llms.txt`**: fixed the documentation index taking a nested page named
+  `docs` for the docs section when a site has no top-level one ([#2875][]).
+- **`shared` chrome**:
+  - Fixed the navbar and footer missing from every page of a doc-rooted site;
+    they render on each language's root page, the [donor page][ug-donor-page]
+    ([#2888][]).
+  - Changed the donor to keep the navbar and footer on its HTML render only; its
+    other renders, the home page's print render included, carry placeholders.
+  - Documented the [per-page `td: { chrome: full }` setting][ug-chrome-per-page]
+    and its limits.
 
 **For maintainers**:
 
-- ...
+- Made docsy.dev builds report duplicate target paths on every build kind, and
+  `npm run build` (local, test and scheduled builds) fail on any warning;
+  preview and production builds keep warnings as warnings ([#2888][]).
+- Made the publish workflow accept release tags on `release`'s history, so a
+  [patch on `release`][] can publish to npm ([#2905][]).
 
+[#2875]: https://github.com/docsy/docsy/issues/2875
+[#2888]: https://github.com/docsy/docsy/pull/2888
+[#2905]: https://github.com/docsy/docsy/pull/2905
 [0.19.0]: https://github.com/docsy/docsy/releases/latest?FIXME=v0.19.0
 [git history since 0.18.0]:
   https://github.com/docsy/docsy/compare/v0.18.0...main
+[patch on `release`]: /project/build/git-repo/#patch-on-release
+[project-root-page]: /project/design/root-page/
+[ug-chrome-per-page]: /docs/deployment/chrome/#setting-the-build-mode
+[ug-donor-page]: /docs/deployment/chrome/#donor-pages
 
 ## v0.18.0 {#v0.18.0}
 
